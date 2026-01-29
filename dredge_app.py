@@ -32,8 +32,9 @@ class DredgeApp(QtWidgets.QMainWindow):
         self.utm_transformer = None
         self.utm_zone = None
         
-        # Current selection
-        self.selected_regions = []  # List of {name, start_time, end_time}
+        # Annotations storage
+        self.annotations = []  # List of annotation dictionaries with full metadata
+        self.annotation_id_counter = 1  # For unique IDs
         
         self.init_ui()
         
@@ -48,21 +49,33 @@ class DredgeApp(QtWidgets.QMainWindow):
         control_panel = self.create_control_panel()
         main_layout.addWidget(control_panel)
         
-        # Splitter for location and time series plots
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        # Horizontal splitter for main content and annotations panel
+        h_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        
+        # Vertical splitter for location and time series plots (left side)
+        v_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         
         # Location plot (top)
         self.location_plot_widget = self.create_location_plot()
-        splitter.addWidget(self.location_plot_widget)
+        v_splitter.addWidget(self.location_plot_widget)
         
         # Time series plot (bottom)
         self.timeseries_plot_widget = self.create_timeseries_plot()
-        splitter.addWidget(self.timeseries_plot_widget)
+        v_splitter.addWidget(self.timeseries_plot_widget)
         
-        # Set initial sizes (40% location, 60% time series)
-        splitter.setSizes([360, 540])
+        # Set initial sizes for vertical splitter (40% location, 60% time series)
+        v_splitter.setSizes([360, 540])
         
-        main_layout.addWidget(splitter)
+        h_splitter.addWidget(v_splitter)
+        
+        # Annotations panel (right side)
+        self.annotations_panel = self.create_annotations_panel()
+        h_splitter.addWidget(self.annotations_panel)
+        
+        # Set initial sizes for horizontal splitter (75% plots, 25% annotations)
+        h_splitter.setSizes([900, 300])
+        
+        main_layout.addWidget(h_splitter)
         
         # Status bar
         self.statusBar().showMessage("Ready - Load data files to begin")
@@ -110,6 +123,53 @@ class DredgeApp(QtWidgets.QMainWindow):
         export_btn = QtWidgets.QPushButton("Export Data")
         export_btn.clicked.connect(self.export_data)
         layout.addWidget(export_btn)
+        
+        return panel
+    
+    def create_annotations_panel(self):
+        """Create the annotations management panel (right side)"""
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Header
+        header = QtWidgets.QLabel("Saved Annotations")
+        header.setStyleSheet("font-weight: bold; font-size: 14px;")
+        layout.addWidget(header)
+        
+        # Annotations list
+        self.annotations_list = QtWidgets.QListWidget()
+        self.annotations_list.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        layout.addWidget(self.annotations_list)
+        
+        # Buttons
+        btn_layout = QtWidgets.QHBoxLayout()
+        
+        self.delete_annotation_btn = QtWidgets.QPushButton("Delete")
+        self.delete_annotation_btn.clicked.connect(self.delete_annotation)
+        self.delete_annotation_btn.setEnabled(False)
+        btn_layout.addWidget(self.delete_annotation_btn)
+        
+        self.clear_annotations_btn = QtWidgets.QPushButton("Clear All")
+        self.clear_annotations_btn.clicked.connect(self.clear_annotations)
+        btn_layout.addWidget(self.clear_annotations_btn)
+        
+        layout.addLayout(btn_layout)
+        
+        layout.addSpacing(10)
+        
+        # Export section
+        export_label = QtWidgets.QLabel("Export")
+        export_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(export_label)
+        
+        self.export_annotated_btn = QtWidgets.QPushButton("Export Annotated Data")
+        self.export_annotated_btn.clicked.connect(self.export_annotated_data)
+        self.export_annotated_btn.setEnabled(False)
+        layout.addWidget(self.export_annotated_btn)
+        
+        # Enable selection handling
+        self.annotations_list.itemSelectionChanged.connect(self.on_annotation_selected)
         
         return panel
         
@@ -186,6 +246,13 @@ class DredgeApp(QtWidgets.QMainWindow):
         """)
         self.brush_mode_btn.clicked.connect(self.toggle_brush_mode)
         header.addWidget(self.brush_mode_btn)
+        
+        # Add Save Annotation button (only enabled when brush mode active)
+        self.save_annotation_btn = QtWidgets.QPushButton("💾 Save Annotation")
+        self.save_annotation_btn.setEnabled(False)
+        self.save_annotation_btn.setStyleSheet("padding: 5px 10px; font-weight: bold;")
+        self.save_annotation_btn.clicked.connect(self.save_annotation)
+        header.addWidget(self.save_annotation_btn)
         
         header.addStretch()
         layout.addLayout(header)
@@ -429,6 +496,7 @@ class DredgeApp(QtWidgets.QMainWindow):
             # Enable brush selection mode
             self.brush_mode_btn.setText("🖌️ Brush Mode ON (Click drag to select)")
             viewbox.setMouseMode(pg.ViewBox.RectMode)  # Rectangle selection mode
+            self.save_annotation_btn.setEnabled(True)  # Enable save button
             
             # Show region selector if we have data
             if self.sensor_df is not None and len(self.sensor_df) > 0:
@@ -443,6 +511,7 @@ class DredgeApp(QtWidgets.QMainWindow):
             self.brush_mode_btn.setText("🖌️ Brush Selection Mode")
             viewbox.setMouseMode(pg.ViewBox.PanMode)
             self.region.setVisible(False)
+            self.save_annotation_btn.setEnabled(False)  # Disable save button
             
             # Clear selection highlighting
             self.location_selection_scatter.setData([])
@@ -486,85 +555,213 @@ class DredgeApp(QtWidgets.QMainWindow):
             f"Time range: {min_dt.strftime('%H:%M:%S')} - {max_dt.strftime('%H:%M:%S')}"
         )
         
-    def save_current_region(self):
-        """Save the current selected region with a name"""
+    def save_annotation(self):
+        """Save the current selected region as an annotation with full metadata"""
+        if self.usbl_df is None or self.sensor_df is None:
+            QtWidgets.QMessageBox.warning(self, "No Data", "Please load both USBL and sensor data first.")
+            return
+            
+        if not self.region.isVisible():
+            QtWidgets.QMessageBox.warning(self, "No Selection", "Please enable brush mode and select a region first.")
+            return
+        
+        # Get region bounds
         min_time, max_time = self.region.getRegion()
-        min_dt = pd.Timestamp(min_time, unit='s')
-        max_dt = pd.Timestamp(max_time, unit='s')
+        min_dt = pd.Timestamp(min_time, unit='s', tz='UTC')
+        max_dt = pd.Timestamp(max_time, unit='s', tz='UTC')
         
-        # Prompt for region name
-        name, ok = QtWidgets.QInputDialog.getText(
-            self, "Save Region", "Enter region name:"
+        # Filter USBL data by time range
+        mask = (self.usbl_df['datetime'] >= min_dt) & (self.usbl_df['datetime'] <= max_dt)
+        selected_usbl = self.usbl_df[mask]
+        
+        if len(selected_usbl) == 0:
+            QtWidgets.QMessageBox.warning(self, "No Data", "No USBL points found in selected time range.")
+            return
+        
+        # Prompt for annotation name and notes
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Save Annotation")
+        dialog_layout = QtWidgets.QVBoxLayout(dialog)
+        
+        dialog_layout.addWidget(QtWidgets.QLabel("Annotation Name:"))
+        name_input = QtWidgets.QLineEdit()
+        name_input.setPlaceholderText("e.g., effective_dredging, transit, on_bottom")
+        dialog_layout.addWidget(name_input)
+        
+        dialog_layout.addWidget(QtWidgets.QLabel("Notes (optional):"))
+        notes_input = QtWidgets.QTextEdit()
+        notes_input.setPlaceholderText("Additional details about this annotation...")
+        notes_input.setMaximumHeight(80)
+        dialog_layout.addWidget(notes_input)
+        
+        # Show preview
+        preview_label = QtWidgets.QLabel(
+            f"Time range: {min_dt.strftime('%Y-%m-%d %H:%M:%S')} to {max_dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"USBL points: {len(selected_usbl)}"
         )
+        preview_label.setStyleSheet("color: gray; font-size: 10px;")
+        dialog_layout.addWidget(preview_label)
         
-        if ok and name:
-            region_info = {
-                'name': name,
-                'start_time': min_dt,
-                'end_time': max_dt
+        # Buttons
+        btn_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        btn_box.accepted.connect(dialog.accept)
+        btn_box.rejected.connect(dialog.reject)
+        dialog_layout.addWidget(btn_box)
+        
+        if dialog.exec() == QtWidgets.QDialog.Accepted:
+            name = name_input.text().strip()
+            if not name:
+                QtWidgets.QMessageBox.warning(self, "Invalid Name", "Please enter an annotation name.")
+                return
+                
+            # Get start/end coordinates (first and last USBL points in selection)
+            start_point = selected_usbl.iloc[0]
+            end_point = selected_usbl.iloc[-1]
+            
+            # Create annotation record with full metadata
+            annotation = {
+                'annotation_id': self.annotation_id_counter,
+                'annotation_name': name,
+                'start_datetime': min_dt,
+                'end_datetime': max_dt,
+                'start_lat': start_point.get('latitude', None),
+                'start_lon': start_point.get('longitude', None),
+                'end_lat': end_point.get('latitude', None),
+                'end_lon': end_point.get('longitude', None),
+                'start_easting': start_point['easting'],
+                'start_northing': start_point['northing'],
+                'end_easting': end_point['easting'],
+                'end_northing': end_point['northing'],
+                'utm_zone': self.utm_zone,
+                'num_usbl_points': len(selected_usbl),
+                'notes': notes_input.toPlainText().strip()
             }
-            self.selected_regions.append(region_info)
             
-            QtWidgets.QMessageBox.information(
-                self, "Region Saved",
-                f"Region '{name}' saved:\n{min_dt} to {max_dt}"
-            )
+            self.annotations.append(annotation)
+            self.annotation_id_counter += 1
             
-    def export_data(self):
-        """Export data with tagged regions"""
-        if not self.selected_regions:
-            QtWidgets.QMessageBox.warning(
-                self, "No Regions",
-                "No regions have been saved. Please select and save regions first."
-            )
+            # Update annotations list UI
+            self.refresh_annotations_list()
+            
+            # Enable export button
+            self.export_annotated_btn.setEnabled(True)
+            
+            self.statusBar().showMessage(f"Annotation '{name}' saved ({len(selected_usbl)} points)")
+    
+    def refresh_annotations_list(self):
+        """Refresh the annotations list widget"""
+        self.annotations_list.clear()
+        for ann in self.annotations:
+            item_text = f"[{ann['annotation_id']}] {ann['annotation_name']} ({ann['num_usbl_points']} pts)"
+            self.annotations_list.addItem(item_text)
+    
+    def on_annotation_selected(self):
+        """Handle annotation selection in the list"""
+        self.delete_annotation_btn.setEnabled(len(self.annotations_list.selectedItems()) > 0)
+    
+    def delete_annotation(self):
+        """Delete the selected annotation"""
+        selected_items = self.annotations_list.selectedItems()
+        if not selected_items:
             return
             
-        # Choose export directory
-        directory = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Select Export Directory"
+        selected_index = self.annotations_list.row(selected_items[0])
+        ann = self.annotations[selected_index]
+        
+        reply = QtWidgets.QMessageBox.question(
+            self, "Delete Annotation",
+            f"Delete annotation '{ann['annotation_name']}'?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
         )
         
-        if not directory:
+        if reply == QtWidgets.QMessageBox.Yes:
+            self.annotations.pop(selected_index)
+            self.refresh_annotations_list()
+            
+            if len(self.annotations) == 0:
+                self.export_annotated_btn.setEnabled(False)
+                
+            self.statusBar().showMessage(f"Annotation '{ann['annotation_name']}' deleted")
+    
+    def clear_annotations(self):
+        """Clear all annotations"""
+        if len(self.annotations) == 0:
             return
             
+        reply = QtWidgets.QMessageBox.question(
+            self, "Clear All Annotations",
+            f"Delete all {len(self.annotations)} annotations?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+        )
+        
+        if reply == QtWidgets.QMessageBox.Yes:
+            self.annotations = []
+            self.refresh_annotations_list()
+            self.export_annotated_btn.setEnabled(False)
+            self.statusBar().showMessage("All annotations cleared")
+            
+    def export_annotated_data(self):
+        """Export both annotation metadata and USBL data with annotation columns"""
+        if len(self.annotations) == 0:
+            QtWidgets.QMessageBox.warning(self, "No Annotations", "Please save at least one annotation before exporting.")
+            return
+            
+        if self.usbl_df is None:
+            QtWidgets.QMessageBox.warning(self, "No Data", "No USBL data loaded.")
+            return
+        
+        # Get output directory
+        output_dir = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Output Directory")
+        if not output_dir:
+            return
+        
         try:
-            # Tag data with regions
-            self.tag_data_with_regions()
+            # 1. Export annotation metadata
+            annotations_df = pd.DataFrame(self.annotations)
+            metadata_path = f"{output_dir}/annotations_metadata.csv"
+            annotations_df.to_csv(metadata_path, index=False)
             
-            # Export USBL data as CSV
-            usbl_output = f"{directory}/usbl_tagged.csv"
-            self.usbl_df.to_csv(usbl_output, index=False)
+            # 2. Create USBL data with boolean annotation columns
+            usbl_export = self.usbl_df.copy()
             
-            # Export sensor data as CSV
-            sensor_output = f"{directory}/sensor_tagged.csv"
-            self.sensor_df.to_csv(sensor_output, index=False)
+            # Add a boolean column for each annotation
+            for ann in self.annotations:
+                col_name = ann['annotation_name']
+                # Mark TRUE for any USBL point within the annotation's time range
+                mask = (usbl_export['datetime'] >= ann['start_datetime']) & \
+                       (usbl_export['datetime'] <= ann['end_datetime'])
+                usbl_export[col_name] = mask
+            
+            usbl_path = f"{output_dir}/usbl_with_annotations.csv"
+            usbl_export.to_csv(usbl_path, index=False)
             
             QtWidgets.QMessageBox.information(
                 self, "Export Complete",
-                f"Data exported to:\n{usbl_output}\n{sensor_output}\n\n"
-                "Shapefile export will be implemented in next iteration."
+                f"Exported:\n\n"
+                f"1. {metadata_path}\n"
+                f"   ({len(self.annotations)} annotations)\n\n"
+                f"2. {usbl_path}\n"
+                f"   ({len(usbl_export)} USBL points with {len(self.annotations)} annotation columns)"
             )
             
+            self.statusBar().showMessage(f"Exported annotated data to {output_dir}")
+            
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Export Error", str(e))
+            QtWidgets.QMessageBox.critical(self, "Export Error", f"Failed to export:\n{str(e)}")
+            
+    def save_current_region(self):
+        """Deprecated - replaced by save_annotation"""
+        pass
+            
+    def export_data(self):
+        """Deprecated - use export_annotated_data instead"""
+        QtWidgets.QMessageBox.information(self, "Note", "Please use 'Export Annotated Data' button in the Annotations panel.")
             
     def tag_data_with_regions(self):
-        """Add region tags as columns to dataframes"""
-        # Add a column for each saved region
-        for region in self.selected_regions:
-            col_name = f"region_{region['name']}"
-            
-            # Tag USBL data
-            if self.usbl_df is not None:
-                mask = (self.usbl_df['datetime'] >= region['start_time']) & \
-                       (self.usbl_df['datetime'] <= region['end_time'])
-                self.usbl_df[col_name] = mask
-                
-            # Tag sensor data
-            if self.sensor_df is not None:
-                mask = (self.sensor_df['datetime'] >= region['start_time']) & \
-                       (self.sensor_df['datetime'] <= region['end_time'])
-                self.sensor_df[col_name] = mask
+        """Deprecated - functionality moved to export_annotated_data"""
+        pass
 
 
 def main():
