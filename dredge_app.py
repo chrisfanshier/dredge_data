@@ -51,9 +51,28 @@ class DredgeApp(QtWidgets.QMainWindow):
         
         # Horizontal splitter for main content and annotations panel
         h_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        h_splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #ccc;
+                width: 4px;
+            }
+            QSplitter::handle:hover {
+                background-color: #999;
+            }
+        """)
         
         # Vertical splitter for location and time series plots (left side)
         v_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        v_splitter.setHandleWidth(6)
+        v_splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #bbb;
+                height: 6px;
+            }
+            QSplitter::handle:hover {
+                background-color: #4CAF50;
+            }
+        """)
         
         # Location plot (top)
         self.location_plot_widget = self.create_location_plot()
@@ -113,16 +132,6 @@ class DredgeApp(QtWidgets.QMainWindow):
         layout.addWidget(self.sensor_label)
         
         layout.addStretch()
-        
-        # Region management
-        self.save_region_btn = QtWidgets.QPushButton("Save Selected Region")
-        self.save_region_btn.clicked.connect(self.save_current_region)
-        self.save_region_btn.setEnabled(False)
-        layout.addWidget(self.save_region_btn)
-        
-        export_btn = QtWidgets.QPushButton("Export Data")
-        export_btn.clicked.connect(self.export_data)
-        layout.addWidget(export_btn)
         
         return panel
     
@@ -217,21 +226,16 @@ class DredgeApp(QtWidgets.QMainWindow):
         return widget
         
     def create_timeseries_plot(self):
-        """Create the time series plot widget (bottom panel)"""
+        """Create the time series plot widget with two stacked plots (bottom panel)"""
         widget = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # Header with column selector
+        # Header with controls
         header = QtWidgets.QHBoxLayout()
-        label = QtWidgets.QLabel("Time Series Plot")
+        label = QtWidgets.QLabel("Time Series Plots")
         label.setStyleSheet("font-weight: bold;")
         header.addWidget(label)
-        
-        header.addWidget(QtWidgets.QLabel("Column:"))
-        self.column_selector = QtWidgets.QComboBox()
-        self.column_selector.currentTextChanged.connect(self.update_timeseries_plot)
-        header.addWidget(self.column_selector)
         
         # Add brush selection toggle button
         self.brush_mode_btn = QtWidgets.QPushButton("🖌️ Brush Selection Mode")
@@ -257,52 +261,136 @@ class DredgeApp(QtWidgets.QMainWindow):
         header.addStretch()
         layout.addLayout(header)
         
-        # PyQtGraph plot widget with OpenGL for performance
-        date_axis = pg.DateAxisItem(orientation='bottom')
-        self.timeseries_plot = pg.PlotWidget(axisItems={'bottom': date_axis})
-        self.timeseries_plot.setBackground('w')
-        self.timeseries_plot.showGrid(x=True, y=True, alpha=0.3)
-        self.timeseries_plot.setLabel('bottom', 'Time')
+        # Create shared date axis for bottom plot
+        self.shared_date_axis = pg.DateAxisItem(orientation='bottom')
         
-        # Store reference to date axis for debugging
-        self.date_axis = date_axis
+        # === PLOT 1 ===
+        plot1_container = QtWidgets.QWidget()
+        plot1_layout = QtWidgets.QVBoxLayout(plot1_container)
+        plot1_layout.setContentsMargins(0, 5, 0, 5)
         
-        # Enable OpenGL for better performance with large datasets
-        self.timeseries_plot.setClipToView(True)
-        self.timeseries_plot.setDownsampling(auto=True, mode='peak')
+        # Plot 1 header
+        plot1_header = QtWidgets.QHBoxLayout()
+        plot1_header.addWidget(QtWidgets.QLabel("Plot 1:"))
+        self.column_selector_1 = QtWidgets.QComboBox()
+        self.column_selector_1.currentTextChanged.connect(lambda: self.update_timeseries_plot(1))
+        plot1_header.addWidget(self.column_selector_1)
+        plot1_header.addStretch()
+        plot1_layout.addLayout(plot1_header)
         
-        # Enable better mouse controls
-        # - Mouse wheel zooms Y axis
-        # - Ctrl+wheel zooms X axis
-        # - Left drag pans
-        # - Right-click menu for autoscale/zoom out
-        viewbox = self.timeseries_plot.getViewBox()
-        viewbox.setMouseMode(pg.ViewBox.PanMode)  # Left drag = pan
-        viewbox.setMenuEnabled(True)  # Right-click menu
+        # Plot 1 widget (no bottom axis labels, will be shared)
+        self.timeseries_plot_1 = pg.PlotWidget()
+        self.timeseries_plot_1.setBackground('w')
+        self.timeseries_plot_1.showGrid(x=True, y=True, alpha=0.3)
+        self.timeseries_plot_1.getAxis('bottom').setStyle(showValues=False)  # Hide bottom labels
         
-        # Allow independent X/Y scaling (not aspect-locked)
-        viewbox.setAspectLocked(False)
+        # Enable performance features
+        self.timeseries_plot_1.setClipToView(True)
+        self.timeseries_plot_1.setDownsampling(auto=True, mode='peak')
         
-        layout.addWidget(self.timeseries_plot)
+        # Enable mouse controls
+        viewbox1 = self.timeseries_plot_1.getViewBox()
+        viewbox1.setMouseMode(pg.ViewBox.PanMode)
+        viewbox1.setMenuEnabled(True)
+        viewbox1.setAspectLocked(False)
         
-        # Data curve
-        self.timeseries_curve = self.timeseries_plot.plot(
+        plot1_layout.addWidget(self.timeseries_plot_1)
+        
+        # Plot 1 curve
+        self.timeseries_curve_1 = self.timeseries_plot_1.plot(
             pen=pg.mkPen('b', width=1),
-            connect='finite'  # Don't connect over NaN values
+            connect='finite'
         )
         
-        # Brush selection region (hidden by default)
-        self.region = pg.LinearRegionItem(
-            brush=pg.mkBrush(100, 150, 255, 80),  # Light blue, semi-transparent
+        layout.addWidget(plot1_container)
+        
+        # === PLOT 2 ===
+        plot2_container = QtWidgets.QWidget()
+        plot2_layout = QtWidgets.QVBoxLayout(plot2_container)
+        plot2_layout.setContentsMargins(0, 5, 0, 0)
+        
+        # Plot 2 header
+        plot2_header = QtWidgets.QHBoxLayout()
+        plot2_header.addWidget(QtWidgets.QLabel("Plot 2:"))
+        self.column_selector_2 = QtWidgets.QComboBox()
+        self.column_selector_2.currentTextChanged.connect(lambda: self.update_timeseries_plot(2))
+        plot2_header.addWidget(self.column_selector_2)
+        plot2_header.addStretch()
+        plot2_layout.addLayout(plot2_header)
+        
+        # Plot 2 widget with shared date axis
+        self.timeseries_plot_2 = pg.PlotWidget(axisItems={'bottom': self.shared_date_axis})
+        self.timeseries_plot_2.setBackground('w')
+        self.timeseries_plot_2.showGrid(x=True, y=True, alpha=0.3)
+        self.timeseries_plot_2.setLabel('bottom', 'Time')
+        
+        # Link X-axes between plots so they zoom/pan together
+        self.timeseries_plot_2.setXLink(self.timeseries_plot_1)
+        
+        # Enable performance features
+        self.timeseries_plot_2.setClipToView(True)
+        self.timeseries_plot_2.setDownsampling(auto=True, mode='peak')
+        
+        # Enable mouse controls
+        viewbox2 = self.timeseries_plot_2.getViewBox()
+        viewbox2.setMouseMode(pg.ViewBox.PanMode)
+        viewbox2.setMenuEnabled(True)
+        viewbox2.setAspectLocked(False)
+        
+        plot2_layout.addWidget(self.timeseries_plot_2)
+        
+        # Plot 2 curve
+        self.timeseries_curve_2 = self.timeseries_plot_2.plot(
+            pen=pg.mkPen('r', width=1),
+            connect='finite'
+        )
+        
+        layout.addWidget(plot2_container)
+        
+        # Brush selection regions (one for each plot, synchronized)
+        self.region_1 = pg.LinearRegionItem(
+            brush=pg.mkBrush(100, 150, 255, 80),
             movable=True
         )
-        self.region.setZValue(10)
-        self.region.sigRegionChanged.connect(self.on_region_changed)
-        self.region.setVisible(False)  # Hidden until brush mode activated
-        self.timeseries_plot.addItem(self.region)
-        self.region.setVisible(False)  # Hidden until data is loaded
+        self.region_1.setZValue(10)
+        self.region_1.setVisible(False)
+        self.timeseries_plot_1.addItem(self.region_1)
+        
+        self.region_2 = pg.LinearRegionItem(
+            brush=pg.mkBrush(100, 150, 255, 80),
+            movable=True
+        )
+        self.region_2.setZValue(10)
+        self.region_2.setVisible(False)
+        self.timeseries_plot_2.addItem(self.region_2)
+        
+        # Link the regions so they move together
+        self.region_1.sigRegionChanged.connect(lambda: self._sync_regions(1))
+        self.region_2.sigRegionChanged.connect(lambda: self._sync_regions(2))
+        
+        # Keep reference to "main" region for compatibility
+        self.region = self.region_2
+        
+        # Store current X-range for keeping axis fixed when changing columns
+        self.fixed_x_range = None
         
         return widget
+    
+    def _sync_regions(self, source):
+        """Synchronize brush regions between plots"""
+        if source == 1:
+            # Region 1 moved, update region 2
+            self.region_2.blockSignals(True)
+            self.region_2.setRegion(self.region_1.getRegion())
+            self.region_2.blockSignals(False)
+        else:
+            # Region 2 moved, update region 1
+            self.region_1.blockSignals(True)
+            self.region_1.setRegion(self.region_2.getRegion())
+            self.region_1.blockSignals(False)
+        
+        # Trigger the annotation highlight update
+        self.on_region_changed()
         
     def load_usbl_data(self):
         """Load USBL data from CSV file"""
@@ -372,11 +460,30 @@ class DredgeApp(QtWidgets.QMainWindow):
             if self.sensor_df['datetime'].dt.tz is None:
                 self.sensor_df['datetime'] = self.sensor_df['datetime'].dt.tz_localize('UTC')
             
-            # Update column selector (exclude datetime)
+            # Update column selectors for both plots (exclude datetime)
             numeric_columns = [col for col in self.sensor_df.columns 
                              if col != 'datetime' and pd.api.types.is_numeric_dtype(self.sensor_df[col])]
-            self.column_selector.clear()
-            self.column_selector.addItems(numeric_columns)
+            
+            # Block signals while populating to avoid triggering updates prematurely
+            self.column_selector_1.blockSignals(True)
+            self.column_selector_2.blockSignals(True)
+            
+            self.column_selector_1.clear()
+            self.column_selector_1.addItems(numeric_columns)
+            self.column_selector_2.clear()
+            self.column_selector_2.addItems(numeric_columns)
+            
+            # Set different defaults for each plot if possible
+            if len(numeric_columns) >= 2:
+                self.column_selector_2.setCurrentIndex(1)  # Second column in plot 2
+            
+            # Re-enable signals
+            self.column_selector_1.blockSignals(False)
+            self.column_selector_2.blockSignals(False)
+            
+            # Now manually trigger the initial plots
+            self.update_timeseries_plot(1)
+            self.update_timeseries_plot(2)
             
             # Update UI
             self.sensor_label.setText(f"✓ {len(self.sensor_df)} sensor points ({len(numeric_columns)} columns)")
@@ -457,14 +564,31 @@ class DredgeApp(QtWidgets.QMainWindow):
         if self.region.isVisible():
             self.on_region_changed()
         
-    def update_timeseries_plot(self):
-        """Update time series plot with selected column"""
+    def update_timeseries_plot(self, plot_num):
+        """Update time series plot with selected column
+        
+        Args:
+            plot_num: 1 or 2, indicating which plot to update
+        """
         if self.sensor_df is None:
             return
             
-        column = self.column_selector.currentText()
+        # Get the appropriate selector and plot objects
+        if plot_num == 1:
+            column = self.column_selector_1.currentText()
+            plot_widget = self.timeseries_plot_1
+            curve = self.timeseries_curve_1
+        else:
+            column = self.column_selector_2.currentText()
+            plot_widget = self.timeseries_plot_2
+            curve = self.timeseries_curve_2
+            
         if not column:
             return
+            
+        # Store current X-range before updating (to keep axis fixed)
+        viewbox = plot_widget.getViewBox()
+        current_x_range = viewbox.viewRange()[0]
             
         # Filter out NaN values (common with sparse data from outer merge)
         valid_mask = self.sensor_df[column].notna()
@@ -472,46 +596,73 @@ class DredgeApp(QtWidgets.QMainWindow):
         
         if len(valid_data) == 0:
             # No data to plot
-            self.timeseries_curve.setData([], [])
+            curve.setData([], [])
             return
             
         # Convert datetime to timestamp (seconds since epoch) for x-axis
         time_values = valid_data['datetime'].values.astype('datetime64[s]').astype(np.float64)
         y_values = valid_data[column].values
         
-        # Debug: print time range
-        print(f"Plotting {column}: time range = {time_values.min():.2f} to {time_values.max():.2f}")
-        print(f"  As datetime: {pd.Timestamp(time_values.min(), unit='s')} to {pd.Timestamp(time_values.max(), unit='s')}")
-        
-        self.timeseries_curve.setData(time_values, y_values)
+        # Update the curve
+        curve.setData(time_values, y_values)
         
         # Update axis labels
-        self.timeseries_plot.setLabel('left', column)
+        plot_widget.setLabel('left', column)
+        
+        # Restore X-range to keep axis fixed when switching columns
+        # Only do this if we had a previous range and it's valid
+        if self.fixed_x_range is not None:
+            viewbox.setXRange(*self.fixed_x_range, padding=0)
+        elif current_x_range[0] != current_x_range[1]:
+            # First time plotting - store the auto-range
+            viewbox.enableAutoRange(axis='x')
+            viewbox.enableAutoRange(axis='y')
+            # After auto-range, store it
+            QtCore.QTimer.singleShot(100, lambda: self._store_x_range(plot_widget))
+    
+    def _store_x_range(self, plot_widget):
+        """Helper to store the current X-range after auto-ranging"""
+        viewbox = plot_widget.getViewBox()
+        self.fixed_x_range = viewbox.viewRange()[0]
         
     def toggle_brush_mode(self, checked):
         """Toggle between pan mode and brush selection mode"""
-        viewbox = self.timeseries_plot.getViewBox()
+        # Both plots share the same viewbox behavior
+        viewbox1 = self.timeseries_plot_1.getViewBox()
+        viewbox2 = self.timeseries_plot_2.getViewBox()
         
         if checked:
-            # Enable brush selection mode
+            # Enable brush selection mode on both plots
             self.brush_mode_btn.setText("🖌️ Brush Mode ON (Click drag to select)")
-            viewbox.setMouseMode(pg.ViewBox.RectMode)  # Rectangle selection mode
-            self.save_annotation_btn.setEnabled(True)  # Enable save button
+            viewbox1.setMouseMode(pg.ViewBox.RectMode)
+            viewbox2.setMouseMode(pg.ViewBox.RectMode)
+            self.save_annotation_btn.setEnabled(True)
             
-            # Show region selector if we have data
+            # Show region selectors if we have data
             if self.sensor_df is not None and len(self.sensor_df) > 0:
                 # Initialize region to middle of current view
-                x_range = viewbox.viewRange()[0]
+                x_range = viewbox2.viewRange()[0]
                 center = (x_range[0] + x_range[1]) / 2
                 width = (x_range[1] - x_range[0]) * 0.2
-                self.region.setRegion([center - width/2, center + width/2])
-                self.region.setVisible(True)
+                region_range = [center - width/2, center + width/2]
+                
+                # Set both regions to same range
+                self.region_1.setRegion(region_range)
+                self.region_2.setRegion(region_range)
+                
+                # Show both regions
+                self.region_1.setVisible(True)
+                self.region_2.setVisible(True)
         else:
-            # Back to pan mode
+            # Back to pan mode on both plots
             self.brush_mode_btn.setText("🖌️ Brush Selection Mode")
-            viewbox.setMouseMode(pg.ViewBox.PanMode)
-            self.region.setVisible(False)
-            self.save_annotation_btn.setEnabled(False)  # Disable save button
+            viewbox1.setMouseMode(pg.ViewBox.PanMode)
+            viewbox2.setMouseMode(pg.ViewBox.PanMode)
+            
+            # Hide both regions
+            self.region_1.setVisible(False)
+            self.region_2.setVisible(False)
+            self.save_annotation_btn.setEnabled(False)
             
             # Clear selection highlighting
             self.location_selection_scatter.setData([])
@@ -718,9 +869,15 @@ class DredgeApp(QtWidgets.QMainWindow):
             return
         
         try:
+            import os
+            
+            # Ensure output_dir is actually a directory
+            if not os.path.isdir(output_dir):
+                raise ValueError(f"Selected path is not a directory: {output_dir}")
+            
             # 1. Export annotation metadata
             annotations_df = pd.DataFrame(self.annotations)
-            metadata_path = f"{output_dir}/annotations_metadata.csv"
+            metadata_path = os.path.join(output_dir, "annotations_metadata.csv")
             annotations_df.to_csv(metadata_path, index=False)
             
             # 2. Create USBL data with boolean annotation columns
@@ -734,7 +891,7 @@ class DredgeApp(QtWidgets.QMainWindow):
                        (usbl_export['datetime'] <= ann['end_datetime'])
                 usbl_export[col_name] = mask
             
-            usbl_path = f"{output_dir}/usbl_with_annotations.csv"
+            usbl_path = os.path.join(output_dir, "usbl_with_annotations.csv")
             usbl_export.to_csv(usbl_path, index=False)
             
             QtWidgets.QMessageBox.information(
