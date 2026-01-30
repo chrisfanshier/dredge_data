@@ -31,6 +31,7 @@ class DredgeApp(QtWidgets.QMainWindow):
         self.sensor_df = None
         self.utm_transformer = None
         self.utm_zone = None
+        self.core_name = None  # Extracted from USBL filename
         
         # Annotations storage
         self.annotations = []  # List of annotation dictionaries with full metadata
@@ -402,6 +403,13 @@ class DredgeApp(QtWidgets.QMainWindow):
             return
             
         try:
+            # Extract core name from filename (e.g., "RR2509-D13" from "RR2509-D13_usbl.csv")
+            import os
+            basename = os.path.basename(filename)
+            # Remove extension and common suffixes
+            core_name = basename.replace('.csv', '').replace('_usbl', '').replace('_USBL', '')
+            self.core_name = core_name
+            
             # Load data
             self.usbl_df = pd.read_csv(filename)
             
@@ -488,15 +496,8 @@ class DredgeApp(QtWidgets.QMainWindow):
             # Update UI
             self.sensor_label.setText(f"✓ {len(self.sensor_df)} sensor points ({len(numeric_columns)} columns)")
             self.sensor_label.setStyleSheet("color: green;")
-            
-            # Plot first column
-            if numeric_columns:
-                self.update_timeseries_plot()
                 
             self.statusBar().showMessage(f"Loaded sensor data: {len(self.sensor_df)} points")
-            
-            # Enable region selection
-            self.save_region_btn.setEnabled(True)
             
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to load sensor data:\n{str(e)}")
@@ -871,13 +872,38 @@ class DredgeApp(QtWidgets.QMainWindow):
         try:
             import os
             
+            # Normalize the path (convert to proper format for OS)
+            output_dir = os.path.normpath(output_dir)
+            
             # Ensure output_dir is actually a directory
             if not os.path.isdir(output_dir):
                 raise ValueError(f"Selected path is not a directory: {output_dir}")
             
+            # Test if we can write to this directory
+            test_file = os.path.join(output_dir, ".write_test")
+            try:
+                with open(test_file, 'w') as f:
+                    f.write("test")
+                os.remove(test_file)
+            except (PermissionError, IOError) as e:
+                raise PermissionError(f"Cannot write to directory: {output_dir}\n\n{str(e)}")
+            
+            # Create filename prefix from core name + timestamp
+            from datetime import datetime as dt
+            timestamp = dt.now().strftime("%Y%m%d_%H%M%S")
+            
+            if self.core_name:
+                prefix = f"{self.core_name}_{timestamp}"
+            else:
+                prefix = f"annotations_{timestamp}"
+            
             # 1. Export annotation metadata
             annotations_df = pd.DataFrame(self.annotations)
-            metadata_path = os.path.join(output_dir, "annotations_metadata.csv")
+            metadata_filename = f"{prefix}_metadata.csv"
+            metadata_path = os.path.join(output_dir, metadata_filename)
+            
+            # Normalize the output path
+            metadata_path = os.path.normpath(metadata_path)
             annotations_df.to_csv(metadata_path, index=False)
             
             # 2. Create USBL data with boolean annotation columns
@@ -891,7 +917,9 @@ class DredgeApp(QtWidgets.QMainWindow):
                        (usbl_export['datetime'] <= ann['end_datetime'])
                 usbl_export[col_name] = mask
             
-            usbl_path = os.path.join(output_dir, "usbl_with_annotations.csv")
+            usbl_filename = f"{prefix}_usbl_annotated.csv"
+            usbl_path = os.path.join(output_dir, usbl_filename)
+            usbl_path = os.path.normpath(usbl_path)
             usbl_export.to_csv(usbl_path, index=False)
             
             QtWidgets.QMessageBox.information(
