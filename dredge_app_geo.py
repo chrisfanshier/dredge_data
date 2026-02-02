@@ -106,6 +106,19 @@ class DredgeApp(QtWidgets.QMainWindow):
         panel = QtWidgets.QWidget()
         layout = QtWidgets.QHBoxLayout(panel)
         
+        self.core_name_label = QtWidgets.QLabel("No data loaded")
+        self.core_name_label.setStyleSheet("""
+            font-weight: bold; 
+            font-size: 16px; 
+            color: #2c3e50;
+            padding: 5px 10px;
+            background-color: #ecf0f1;
+            border-radius: 3px;
+        """)
+        layout.addWidget(self.core_name_label)
+    
+        layout.addSpacing(20)
+
         # USBL file loading
         usbl_btn = QtWidgets.QPushButton("Load USBL Data")
         usbl_btn.clicked.connect(self.load_usbl_data)
@@ -511,6 +524,16 @@ class DredgeApp(QtWidgets.QMainWindow):
             core_name = basename.replace('.csv', '').replace('_usbl', '').replace('_USBL', '')
             self.core_name = core_name
             
+            self.core_name_label.setText(f"Core: {core_name}")
+            self.core_name_label.setStyleSheet("""
+                font-weight: bold; 
+                font-size: 16px; 
+                color: #27ae60;
+                padding: 5px 10px;
+                background-color: #d5f4e6;
+                border-radius: 3px;
+            """)
+
             # Load data
             self.usbl_df = pd.read_csv(filename)
             
@@ -978,7 +1001,45 @@ class DredgeApp(QtWidgets.QMainWindow):
             self.annotations = []
             self.refresh_annotations_list()
             self.statusBar().showMessage("All annotations cleared")
-            
+
+    @staticmethod
+    def ellipse_polygon(center_x, center_y, semi_major, semi_minor, orientation_deg, n_points=36, scale_factor=1.0):
+        """
+        Create ellipse polygon from USBL error parameters
+        
+        Args:
+            center_x: X coordinate (easting)
+            center_y: Y coordinate (northing)
+            semi_major: Semi-major axis length (meters)
+            semi_minor: Semi-minor axis length (meters)
+            orientation_deg: Orientation in degrees (0-360)
+            n_points: Number of points in polygon
+            scale_factor: Multiplier for radii (1.0 for 1σ, 2.45 for 95%)
+        
+        Returns:
+            Shapely Polygon
+        """
+        import numpy as np
+        from shapely.geometry import Polygon
+        
+        # Scale the ellipse
+        a = semi_major * scale_factor
+        b = semi_minor * scale_factor
+        
+        # Convert orientation to radians
+        theta = np.radians(orientation_deg)
+        
+        # Generate ellipse points
+        t = np.linspace(0, 2*np.pi, n_points)
+        x = a * np.cos(t)
+        y = b * np.sin(t)
+        
+        # Rotation matrix
+        x_rot = x * np.cos(theta) - y * np.sin(theta) + center_x
+        y_rot = x * np.sin(theta) + y * np.cos(theta) + center_y
+        
+        return Polygon(zip(x_rot, y_rot))
+
     def export_annotated_data(self):
         """Export USBL data with annotations in selected format(s)"""
         # Check format selection
@@ -1065,22 +1126,75 @@ class DredgeApp(QtWidgets.QMainWindow):
                     import geopandas as gpd
                     from shapely.geometry import Point
                     
-                    # Create GeoDataFrame from USBL data
-                    geometry = [Point(row['easting'], row['northing']) for _, row in usbl_export.iterrows()]
+                    # Prepare data copy for GeoPackage
+                    gpkg_export = usbl_export.copy()
                     
-                    gdf = gpd.GeoDataFrame(
-                        usbl_export,
-                        geometry=geometry,
-                        crs=self.utm_epsg if self.utm_epsg else "EPSG:32610"  # Use stored EPSG code
+                    # Check if we have error ellipse columns
+                    has_ellipse_data = all(col in gpkg_export.columns for col in 
+                                           ['hor_err_major', 'hor_err_minor', 'hor_err_dir'])
+                    
+                    # === POINTS LAYER ===
+                    geometry_points = [Point(row['easting'], row['northing']) 
+                                      for _, row in gpkg_export.iterrows()]
+                    
+                    gdf_points = gpd.GeoDataFrame(
+                        gpkg_export,
+                        geometry=geometry_points,
+                        crs=self.utm_epsg if self.utm_epsg else "EPSG:32610"
                     )
                     
-                    # Export to GeoPackage
+                    # Export points
                     gpkg_filename = f"{prefix}.gpkg"
                     gpkg_path = os.path.normpath(os.path.join(output_dir, gpkg_filename))
-                    gdf.to_file(gpkg_path, layer='usbl_points', driver='GPKG')
+                    gdf_points.to_file(gpkg_path, layer='usbl_points', driver='GPKG')
                     
                     ann_count = len(self.annotations) if self.annotations else 0
-                    exported_files.append(f"✓ {gpkg_filename} (Point layer: {len(gdf)} points, {ann_count} annotation columns)")
+                    layers_created = ['usbl_points']
+                    exported_files.append(f"✓ {gpkg_filename} - Points layer: {len(gdf_points)} points, {ann_count} annotation columns")
+                    
+                    # === ELLIPSE LAYERS (if error data exists) ===
+                    if has_ellipse_data:
+                        # 1-sigma ellipses
+                        geometry_1sigma = [
+                            self.ellipse_polygon(
+                                row['easting'], row['northing'],
+                                row['hor_err_major'], row['hor_err_minor'], row['hor_err_dir'],
+                                n_points=36,
+                                scale_factor=1.0  # 1-sigma (68% confidence)
+                            )
+                            for _, row in gpkg_export.iterrows()
+                        ]
+                        
+                        gdf_1sigma = gpd.GeoDataFrame(
+                            gpkg_export,
+                            geometry=geometry_1sigma,
+                            crs=self.utm_epsg if self.utm_epsg else "EPSG:32610"
+                        )
+                        gdf_1sigma.to_file(gpkg_path, layer='error_ellipses_1sigma', driver='GPKG')
+                        layers_created.append('error_ellipses_1sigma')
+                        exported_files.append(f"  └─ 1σ ellipses layer (68% confidence)")
+                        
+                        # 95% confidence ellipses (2.45x for chi-squared distribution)
+                        geometry_95pct = [
+                            self.ellipse_polygon(
+                                row['easting'], row['northing'],
+                                row['hor_err_major'], row['hor_err_minor'], row['hor_err_dir'],
+                                n_points=36,
+                                scale_factor=2.45  # 95% confidence interval
+                            )
+                            for _, row in gpkg_export.iterrows()
+                        ]
+                        
+                        gdf_95pct = gpd.GeoDataFrame(
+                            gpkg_export,
+                            geometry=geometry_95pct,
+                            crs=self.utm_epsg if self.utm_epsg else "EPSG:32610"
+                        )
+                        gdf_95pct.to_file(gpkg_path, layer='error_ellipses_95pct', driver='GPKG')
+                        layers_created.append('error_ellipses_95pct')
+                        exported_files.append(f"  └─ 95% ellipses layer (2.45σ)")
+                    else:
+                        exported_files.append(f"  ⚠️  No error ellipse data (missing hor_err columns)")
                     
                 except ImportError:
                     QtWidgets.QMessageBox.warning(
