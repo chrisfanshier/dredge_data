@@ -1,0 +1,16 @@
+# Dredge App - Lite Version Requirements
+# For CSV export only (smallest install)
+
+PySide6>=6.6.0
+pandas>=2.0.0
+numpy>=1.24.0
+pyqtgraph>=0.13.0
+pyproj>=3.5.0
+scipy>=1.10.0
+
+# Optional: For building executables
+# pyinstaller>=6.0.0
+
+# Note: This version does NOT include geopandas
+# GeoPackage export will be disabled
+# Use Full version for GeoPackage support

@@ -1,0 +1,16 @@
+# Dredge App - Full Version Requirements
+# Includes GeoPackage export with ellipse support
+
+PySide6>=6.6.0
+pandas>=2.0.0
+numpy>=1.24.0
+pyqtgraph>=0.13.0
+pyproj>=3.5.0
+scipy>=1.10.0
+
+# GeoPackage support (adds ~200MB)
+geopandas>=0.14.0
+shapely>=2.0.0
+
+# Optional: For building executables
+# pyinstaller>=6.0.0

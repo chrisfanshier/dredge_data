@@ -103,6 +103,9 @@ def build_full():
         print("   Install with: pip install geopandas")
         return False
     
+    # Get the directory where this script is located (for custom hooks)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
     # PyInstaller command
     cmd = [
         'pyinstaller',
@@ -111,32 +114,44 @@ def build_full():
         '--name=DredgeApp_Full',
         '--icon=NONE',
         
+        # Add custom hooks directory
+        f'--additional-hooks-dir={script_dir}',
+        
         # Hidden imports
         '--hidden-import=pyqtgraph.graphicsItems.ViewBox.axisCtrlTemplate_pyqt6',
         '--hidden-import=pyqtgraph.graphicsItems.PlotItem.plotConfigTemplate_pyqt6',
         '--hidden-import=numpy.core._methods',
         '--hidden-import=numpy.lib.format',
         
-        # Explicitly include geopandas and dependencies
+        # Core packages
         '--hidden-import=geopandas',
-        '--hidden-import=fiona',
-        '--hidden-import=fiona.crs',
-        '--hidden-import=fiona.schema',
-        '--hidden-import=fiona.transform',
+        '--hidden-import=pandas',
         '--hidden-import=shapely',
         '--hidden-import=shapely.geometry',
         '--hidden-import=pyproj',
-        '--hidden-import=pyproj.crs',
         
-        # Collect geopandas data files
-        '--collect-data=geopandas',
-        '--collect-data=fiona',
-        '--collect-data=pyproj',
+        # Fiona - let the custom hook handle it
+        '--hidden-import=fiona',
+        
+        # Collect everything
+        '--collect-all=geopandas',
+        '--collect-all=fiona',
+        '--collect-all=pyproj',
+        '--collect-all=shapely',
+        '--collect-all=pandas',
+        
+        # Collect binaries (DLLs)
+        '--collect-binaries=fiona',
+        '--collect-binaries=shapely',
+        '--collect-binaries=pyproj',
+        '--collect-binaries=gdal',
+        '--collect-binaries=osgeo',
         
         'dredge_app_geo.py'
     ]
     
     print("📦 Running PyInstaller (this may take 5-10 minutes)...")
+    print(f"   Using custom hooks from: {script_dir}")
     result = subprocess.run(cmd)
     
     if result.returncode == 0:
