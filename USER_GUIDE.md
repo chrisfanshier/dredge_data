@@ -247,3 +247,14 @@ If you encounter issues:
 ---
 
 **Version 1.0 - February 2026**
+
+### Missing DLL Error (MSVCP140.dll, VCRUNTIME140.dll, etc.)
+
+If you see an error about a missing DLL (such as `MSVCP140.dll` or `VCRUNTIME140.dll`) when launching the app, you need to install the **Microsoft Visual C++ Redistributable**. This package provides system libraries required by many Windows applications.
+
+**How to fix:**
+1. Download the latest [Microsoft Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) from Microsoft.
+2. Run the installer and follow the prompts.
+3. Try launching the app again.
+
+This is rarely needed, but may be required on some Windows systems.
