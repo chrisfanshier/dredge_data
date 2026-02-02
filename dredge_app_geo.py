@@ -20,6 +20,17 @@ from pyproj import Transformer
 from datetime import datetime
 
 
+try:
+    import geopandas as gpd
+    from shapely.geometry import Point, Polygon
+    GEOPANDAS_AVAILABLE = True
+except ImportError:
+    GEOPANDAS_AVAILABLE = False
+    gpd = None
+    Point = None
+    Polygon = None
+
+
 class DredgeApp(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -207,9 +218,12 @@ class DredgeApp(QtWidgets.QMainWindow):
         
         self.export_gpkg_checkbox = QtWidgets.QCheckBox("GeoPackage (spatial points)")
         self.export_gpkg_checkbox.setChecked(False)
-        self.export_gpkg_checkbox.setEnabled(gpkg_available)
-        self.export_gpkg_checkbox.setToolTip(gpkg_tooltip)
-        if not gpkg_available:
+        self.export_gpkg_checkbox.setEnabled(GEOPANDAS_AVAILABLE)
+        self.export_gpkg_checkbox.setToolTip(
+            "Export as GeoPackage with UTM coordinates" if GEOPANDAS_AVAILABLE 
+            else "GeoPackage export requires 'geopandas' library\nInstall with: pip install geopandas"
+        )
+        if not GEOPANDAS_AVAILABLE:
             self.export_gpkg_checkbox.setStyleSheet("color: gray;")
         layout.addWidget(self.export_gpkg_checkbox)
         
