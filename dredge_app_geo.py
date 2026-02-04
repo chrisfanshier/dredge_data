@@ -838,10 +838,11 @@ class DredgeApp(QtWidgets.QMainWindow):
         else:
             self.location_selection_scatter.setData([])
             
-        # Update status
+        # Update status with start/end times and point count
         self.statusBar().showMessage(
-            f"Selected: {len(selected_usbl)} USBL points | "
-            f"Time range: {min_dt.strftime('%H:%M:%S')} - {max_dt.strftime('%H:%M:%S')}"
+            f"Start: {min_dt.strftime('%H:%M:%S')} | "
+            f"End: {max_dt.strftime('%H:%M:%S')} | "
+            f"Selected: {len(selected_usbl)} USBL points"
         )
     
     @staticmethod
@@ -1045,8 +1046,8 @@ class DredgeApp(QtWidgets.QMainWindow):
         
         # Generate ellipse points
         t = np.linspace(0, 2*np.pi, n_points)
-        x = a * np.cos(t)
-        y = b * np.sin(t)
+        x = (a/2) * np.cos(t)
+        y = (b/2) * np.sin(t)
         
         # Rotation matrix
         x_rot = x * np.cos(theta) - y * np.sin(theta) + center_x
